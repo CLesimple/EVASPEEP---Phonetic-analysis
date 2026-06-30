@@ -1,0 +1,62 @@
+# IPA -> analysis-phoneme mapping for Allosaurus `deu` output
+#
+# STATUS: DRAFT SCAFFOLD. Verify against real Allosaurus `deu` output before production use.
+# Spec: see docs/acoustic-analysis-design.md sec. 3.2.
+#
+# Columns:
+#   ipa       : the phone symbol as emitted by Allosaurus (UTF-8, IPA-like).
+#   phoneme   : the mapped analysis label, or NA if not used by either analysis.
+#   category  : vowel | fricative | NA   (analysis bucket the phoneme belongs to).
+#   is_corner : i | a | u | NA            (tVSA corner-vowel identity; NA otherwise).
+#   note      : human-readable rationale / mapping rule applied.
+#
+# Mapping rules applied (sec. 3.2):
+#   1. Long vowels (length mark U+02D0 'ː') are assimilated to their short counterpart.
+#   2. Diphthongs -> NA.
+#   3. Fricatives: keep ONLY f v s z ʃ ʒ. All other fricatives (ç x h ʁ ...) -> NA.
+#   4. /a/ merge: ɑ and a are merged to a single 'a' category.
+#   5. Everything not needed by either analysis -> NA.
+#
+# Notes:
+#   - Allosaurus' exact symbol set for `deu` may differ (e.g. how it renders the
+#     r-sound ʁ/ɐ, the ich-/ach-Laut ç/x, or whether it emits length marks at all).
+#     Rows below are the *intended* mapping; confirm and adjust symbols after a test run.
+#   - Keep this file UTF-8. Do not let an editor re-encode the IPA characters.
+ipa,phoneme,category,is_corner,note
+i,i,vowel,i,close front unrounded (tVSA corner /i/)
+iː,i,vowel,i,long -> short (rule 1); tVSA corner /i/
+ɪ,ɪ,vowel,NA,near-close near-front (vowel space, not a corner)
+y,y,vowel,NA,close front rounded
+yː,y,vowel,NA,long -> short (rule 1)
+ʏ,ʏ,vowel,NA,near-close near-front rounded
+e,e,vowel,NA,close-mid front unrounded
+eː,e,vowel,NA,long -> short (rule 1)
+ɛ,ɛ,vowel,NA,open-mid front unrounded
+ɛː,ɛ,vowel,NA,long -> short (rule 1)
+ø,ø,vowel,NA,close-mid front rounded
+øː,ø,vowel,NA,long -> short (rule 1)
+œ,œ,vowel,NA,open-mid front rounded
+a,a,vowel,a,open front/central (tVSA corner /a/; /a/ merge target)
+aː,a,vowel,a,long -> short (rule 1); tVSA corner /a/
+ɑ,a,vowel,a,merged into /a/ (rule 4); tVSA corner /a/
+ɐ,NA,NA,NA,reduced schwa-like vowel; dropped from vowel space (sec. 4.1)
+ə,NA,NA,NA,schwa; dropped from vowel space (sec. 4.1)
+o,o,vowel,NA,close-mid back rounded
+oː,o,vowel,NA,long -> short (rule 1)
+ɔ,ɔ,vowel,NA,open-mid back rounded
+u,u,vowel,u,close back rounded (tVSA corner /u/)
+uː,u,vowel,u,long -> short (rule 1); tVSA corner /u/
+ʊ,ʊ,vowel,NA,near-close near-back rounded
+aɪ,NA,NA,NA,diphthong -> NA (rule 2)
+aʊ,NA,NA,NA,diphthong -> NA (rule 2)
+ɔʏ,NA,NA,NA,diphthong -> NA (rule 2)
+f,f,fricative,NA,voiceless labiodental fricative (kept; rule 3)
+v,v,fricative,NA,voiced labiodental fricative (kept; rule 3)
+s,s,fricative,NA,voiceless alveolar fricative (kept; rule 3)
+z,z,fricative,NA,voiced alveolar fricative (kept; rule 3)
+ʃ,ʃ,fricative,NA,voiceless postalveolar fricative (kept; rule 3)
+ʒ,ʒ,fricative,NA,voiced postalveolar fricative (kept; rule 3)
+ç,NA,NA,NA,ich-Laut; excluded fricative -> NA (rule 3)
+x,NA,NA,NA,ach-Laut; excluded fricative -> NA (rule 3)
+h,NA,NA,NA,glottal fricative; excluded -> NA (rule 3)
+ʁ,NA,NA,NA,uvular fricative/approximant (German r); excluded -> NA (rule 3)
