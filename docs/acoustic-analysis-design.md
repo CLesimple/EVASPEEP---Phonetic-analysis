@@ -31,6 +31,8 @@
 
 **Processed sounds:** all sounds **except `Vokal`** (sustained /a/ is out of scope for this pipeline).
 
+**Sequence semantics:** `M1` and `M2` are a **test–retest repetition of the entire task set** (a reliability factor), **not** a within-session time axis. Session/task order is **randomized and counterbalanced across subjects**, which protects the amplification contrast from systematic order confounds. There are **no whole-recording wall-clock timestamps**.
+
 All speech is **German**.
 
 ### 1.2 Speaker metadata file
@@ -41,21 +43,6 @@ A CSV with one row per participant is provided and consumed by the pipeline to s
 |---|---|
 | `VP_ID` | `VP01`, `VP02`, … (must match `ParticipantID` in filenames) |
 | `Gender` | `F` or `M` |
-
-### 1.3 (Optional) Recording-order metadata — for the time/fatigue analysis
-
-To analyse a **time / fatigue effect** at the session level (see §6.1), the acquisition order of recordings is required, because the filename convention does **not** encode acquisition time. If available, provide a CSV (or extra columns) with:
-
-| Column | Values |
-|---|---|
-| `VP_ID` | matches `ParticipantID` |
-| `Sequence` | `M1` / `M2` |
-| `Condition` | `aided` / `unaided` |
-| `Sound` | speech material |
-| `RecordingOrder` *(optional)* | integer order within the session (1, 2, 3, …) |
-| `RecordedAt` *(optional)* | wall-clock timestamp of the recording |
-
-If neither `RecordingOrder` nor `RecordedAt` is available, the time analysis falls back to the coarse `Sequence` (`M1` vs `M2`) contrast plus the within-file exploratory analysis (§6.1).
 
 ---
 
@@ -80,7 +67,7 @@ Additional reproducibility rules:
 - Persist **all parameters** used for every measurement (offsets, window length, formant ceiling, pitch floor/ceiling, frequency band, pre-emphasis flag, DCT settings) as columns/sidecar so any row can be reproduced.
 - Record the **Allosaurus model version** used.
 - Save QA plots (see §7).
-- Pin the **statistics environment** used for §6 modeling (e.g. Python `statsmodels`, or R `lme4`/`lmerTest`).
+- Pin the **statistics environment** used for §6 modeling: **R with `lme4` + `lmerTest`** (record R and package versions).
 
 ---
 
@@ -106,7 +93,7 @@ Mapping rules:
 4. **`/a/ merge:** `ɑ` and `a` are merged to a single `a` category (relevant for tVSA corner vowels).
 5. Everything not needed by either analysis → `NA`.
 
-> The mapping table is the single largest source of downstream error and **must be reviewed and version-controlled** as an explicit asset (e.g. `config/ipa_phoneme_map.csv`).
+> The mapping table is the single largest source of downstream error and **must be reviewed and version-controlled** as an explicit asset: see `config/ipa_phoneme_map.csv` (currently a **draft scaffold** — verify against real Allosaurus `deu` output before production use).
 
 ### 3.3 Effective segment duration (Allosaurus + next-onset + VAD)
 
@@ -123,7 +110,7 @@ Save per file as CSV:
 {ParticipantID}_{Sequence}_{Condition}_{Sound}_phonemes.csv
 ```
 
-Suggested columns: `time`, `duration` (raw Allosaurus), `phone` (raw IPA), `phoneme` (mapped or `NA`), `t_next`, `eff_start`, `eff_end` (after VAD clipping), `topk_candidates`, `topk_probs`, plus filename metadata (`ParticipantID, Sequence, Condition, Sound`).
+Suggested columns: `time`, `duration` (raw Allosaurus), `phone` (raw IPA), `phoneme` (mapped or `NA`), `t_next`, `eff_start`, `eff_end` (after VAD clipping), `time_norm` (token position 0–1, see §6.1), `topk_candidates`, `topk_probs`, plus filename metadata (`ParticipantID, Sequence, Condition, Sound`).
 
 ---
 
@@ -222,39 +209,55 @@ Following the EMU-SDMS recipe (Ch. 21, *Discrete Cosine Transform*):
 | **Hearing-aid confound** | Aided processing (compression, noise reduction, feedback cancellation) can alter the spectrum (esp. high frequencies) and thus affect sibilant moments/DCT and possibly formants. Treat as an interpretive caveat, not just signal. |
 | **Sampling rate caveat** | Allosaurus resamples internally to 16 kHz for *recognition*; all **acoustic measurements** are taken from the **original 48 kHz** audio, preserving the 500 Hz–15 kHz band for fricatives. |
 
-### 6.1 Time / fatigue effect across recordings
+### 6.1 Within-recording drift (time effect)
 
-**Question:** do the acoustic features drift over the course of a session (e.g. due to fatigue), and does any such drift interact with amplification?
+**Scope:** the only time analysis of interest is **within-recording drift** (e.g. warm-up / fatigue *inside* a single recording). Whole-session timing is **out of scope** (no session timestamps; `M1`/`M2` is test–retest, not a time axis — see §1.1).
 
-Because measurements are repeated within speakers, the recommended approach is a **linear mixed-effects model** per feature, separating the time effect from the amplification effect.
+**Predictor — `time_norm`:** for each token, `time_norm = token_timestamp / total_file_duration`, giving a position in **[0, 1] within the recording**.
+- The denominator is the **full file duration** (start→end of file), chosen so a token's position can be mapped straight back onto the file. (Consequence: any leading/trailing silence is included in the scale — an accepted trade-off.)
+- `time_norm` is a **token-level** predictor; it is most meaningful for **connected speech** (`Nordwind`, `Diapix`, `Routine`). For `Bilder` (isolated words) it is weaker and treated as secondary.
+- Store `time_norm` in the per-token output (§3.4 / §4.3).
 
-**Model (per feature, e.g. cVSA per recording; or token-level F1/F2, F0, spectral centroid, DCT k1/k2):**
+**Modeling (R / lme4 + lmerTest):**
 
-- **Fixed effects:**
-  - `Condition` (aided/unaided) — primary effect of interest;
-  - a **time term** (see encodings below);
-  - **`Condition × time` interaction** — tests whether fatigue modulates the amplification effect (often the most informative term);
-  - `Sound` (speech material) as a covariate/stratifier (vowel space and fricative spectra differ systematically by material; otherwise material differences masquerade as time effects).
-- **Random effects:** **random intercept per `VP_ID`** at minimum; add a **random slope for the time term per speaker** if data allow (fatigue may affect talkers differently). For token-level models, nest tokens within recording.
+- **Primary — linear drift** on a token-level feature (e.g. `F1_bark`, `F2_bark`, F0, spectral centroid, DCT `k1`/`k2`):
 
-**Encoding "time" — choose based on available metadata (§1.3):**
+  ```r
+  library(lme4); library(lmerTest)
 
-| Option | Encode as | Pros | Cons / needs |
-|---|---|---|---|
-| **A. Recording order (preferred)** | integer `RecordingOrder` within the session, or continuous `RecordedAt` | Directly tests session-level fatigue; supports a trend/curve | **Requires `RecordingOrder` / `RecordedAt`** (not in filenames) |
-| **B. Sequence M1 vs M2 (fallback)** | 2-level factor (M1=0, M2=1) | Already in filenames; no extra metadata | Only 2 points → coarse drift, not a curve; confounded if M1/M2 isn't purely temporal |
-| **C. Within-file elapsed time (exploratory)** | phoneme timestamp (s) or normalized 0–1 position within the file, as a token-level predictor | Uses existing data; good for long files | Noisy; meaningful only for connected speech (Nordwind/Diapix/Routine); within-file drift ≠ session fatigue |
+  # Fit with ML (REML = FALSE) so nested models can be compared with anova()
+  m_lin <- lmer(feature ~ Condition * time_norm + Sound +
+                          (1 + time_norm | VP_ID) + (1 | VP_ID:Sequence),
+                data = df, REML = FALSE)
+  summary(m_lin)
+  ```
 
-**Plan:** use **Option A** as the primary fatigue predictor if order/timestamps can be recovered; otherwise fall back to **Option B**. Run **Option C** as an exploratory within-file analysis on the connected-speech sounds only.
+  - `Condition * time_norm` tests both the amplification effect and whether drift differs by condition.
+  - `Sound` is a covariate (materials differ systematically).
+  - Random intercept + random `time_norm` slope per `VP_ID`; `Sequence` (M1/M2 test–retest) as a grouping factor.
 
-**Confounds to check and report:**
+- **Quadratic — only if a time effect appears.** If `time_norm` (or its interaction) is non-negligible, fit a 2nd-order polynomial and **test it against the linear model**; keep the quadratic **only if it significantly improves fit**:
 
-- **Condition ↔ order collinearity:** if `aided` was always recorded before `unaided` (or always in M1), amplification and fatigue are partially confounded and cannot be cleanly separated. Cross-tabulate `Condition × order`; note whether the protocol counterbalanced them.
-- **Material ↔ position:** if a given `Sound` always occupies the same session position, `Sound` and time are confounded — keep `Sound` in the model.
-- **Multiple outcomes:** several features are tested → apply multiple-comparison control (e.g. FDR) or pre-specify the primary outcome (cVSA).
-- **Token attrition:** fatigue may reduce speech late in a session → fewer vowels → noisier VSA; weight by or report token counts.
+  ```r
+  m_quad <- lmer(feature ~ Condition * poly(time_norm, 2) + Sound +
+                           (1 + time_norm | VP_ID) + (1 | VP_ID:Sequence),
+                 data = df, REML = FALSE)
+  anova(m_lin, m_quad)   # likelihood-ratio test; compare AIC/BIC
+  ```
 
-**Stack:** fit mixed models in Python (`statsmodels` `MixedLM`) or R (`lme4` / `lmerTest`); pin the chosen environment (§2).
+- **Recording-level outcomes (cVSA / tVSA) cannot use `time_norm`** — they are a single value per file. Model them **without** the drift term, e.g.:
+
+  ```r
+  m_vsa <- lmer(cVSA_bark ~ Condition + Sound +
+                            (1 | VP_ID) + (1 | VP_ID:Sequence),
+                data = df_vsa, REML = TRUE)
+  ```
+
+**Notes / caveats:**
+- Within-file drift (`time_norm`) is **not** session-level fatigue; interpret accordingly.
+- Several features are tested → control multiple comparisons (e.g. FDR) or pre-specify a primary outcome.
+- Watch token attrition across the file (fewer tokens late in long recordings → noisier estimates); report token counts.
+- Pin the R + `lme4`/`lmerTest` versions (§2).
 
 ---
 
@@ -265,7 +268,7 @@ Generate and save check plots:
 - **Vowels:** F1–F2 scatter (Bark) per recording with the **tVSA triangle** and **cVSA convex hull** overlaid; mark rejected outliers.
 - **Fricatives:** spectrum per token with the **centroid** marked; optionally the first DCT coefficients.
 - **Segmentation:** spectrogram with Allosaurus phone boundaries and VAD speech regions overlaid for spot-checking.
-- **Time/fatigue:** feature vs recording order (or `M1`/`M2`) per speaker, with aided/unaided distinguished, to visually inspect drift and any `Condition × time` interaction.
+- **Within-recording drift:** token-level feature vs `time_norm` (0–1) per recording, aided/unaided distinguished, to visually inspect drift and any `Condition × time_norm` interaction.
 
 ---
 
@@ -293,10 +296,10 @@ WebMAUS is a **forced aligner**: it needs **audio + transcript** and places know
 
 ## 9. Open implementation notes / assets to version-control
 
-- `config/ipa_phoneme_map.csv` — the IPA→phoneme mapping (§3.2).
+- `config/ipa_phoneme_map.csv` — the IPA→phoneme mapping (§3.2). **Draft scaffold**; verify against real Allosaurus `deu` output.
 - Speaker metadata CSV (`VP_ID`, `Gender`).
-- (Optional) recording-order metadata (`RecordingOrder` / `RecordedAt`) for the time/fatigue analysis (§1.3, §6.1).
 - Parameter defaults file (offsets, window, bands, DCT settings, pitch/formant settings).
+- `requirements.txt` — pinned Python dependencies (§2).
 - All outputs carry full parameter provenance and package versions (§2).
 
 ---
