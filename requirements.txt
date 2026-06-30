@@ -1,0 +1,25 @@
+# EVASPEEP — Acoustic Feature Analysis: pinned Python dependencies
+# See docs/acoustic-analysis-design.md sec. 2 (Reproducibility).
+#
+# Notes:
+# - Versions are pinned for reproducibility; update deliberately and re-validate.
+# - praat-parselmouth is imported in Python as `parselmouth`.
+# - silero-vad is loaded via the `silero-vad` package (or torch.hub). Use a recent
+#   5.x/6.x release compatible with the torch line below; record the exact resolved
+#   version + model hash in your run provenance.
+# - torchcodec is only required if audio is decoded through torchcodec.
+
+# --- Phonemic segmentation ---
+allosaurus==1.0.2
+
+# --- Acoustic analysis (Praat) ---
+praat-parselmouth==0.4.7
+
+# --- Numerical / signal processing (DCT, convex hull, etc.) ---
+scipy==1.15.3
+
+# --- Voice activity detection (Silero) + torch stack ---
+torch==2.12.0
+torchaudio==2.11.0
+torchcodec==0.14.0
+silero-vad>=5.0,<7.0
