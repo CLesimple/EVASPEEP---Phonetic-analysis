@@ -42,6 +42,21 @@ A CSV with one row per participant is provided and consumed by the pipeline to s
 | `VP_ID` | `VP01`, `VP02`, … (must match `ParticipantID` in filenames) |
 | `Gender` | `F` or `M` |
 
+### 1.3 (Optional) Recording-order metadata — for the time/fatigue analysis
+
+To analyse a **time / fatigue effect** at the session level (see §6.1), the acquisition order of recordings is required, because the filename convention does **not** encode acquisition time. If available, provide a CSV (or extra columns) with:
+
+| Column | Values |
+|---|---|
+| `VP_ID` | matches `ParticipantID` |
+| `Sequence` | `M1` / `M2` |
+| `Condition` | `aided` / `unaided` |
+| `Sound` | speech material |
+| `RecordingOrder` *(optional)* | integer order within the session (1, 2, 3, …) |
+| `RecordedAt` *(optional)* | wall-clock timestamp of the recording |
+
+If neither `RecordingOrder` nor `RecordedAt` is available, the time analysis falls back to the coarse `Sequence` (`M1` vs `M2`) contrast plus the within-file exploratory analysis (§6.1).
+
 ---
 
 ## 2. Reproducibility
@@ -53,13 +68,19 @@ Pin the following versions (record them in `environment.yml` / `requirements.txt
 | `allosaurus` | `1.0.2` |
 | `praat-parselmouth` | `0.4.7` |
 | `scipy` | `1.15.3` |
-| (VAD) `silero-vad` | pin at implementation time |
+| `torch` | `2.12.0` |
+| `torchaudio` | `2.11.0` |
+| `torchcodec` | `0.14.0` |
+| `silero-vad` | recent **5.x/6.x** release (compatible with the torch line above); pin exact version + model hash at implementation time |
+
+> **Silero VAD note:** Silero is loaded as a separate package/model (via `torch.hub` or the `silero-vad` pip package), not pinned directly by torch. The given `torch 2.12.0` / `torchaudio 2.11.0` line is recent, so use a current Silero VAD (5.x/6.x); older Silero releases predate this torch line and may mismatch. `torchcodec 0.14.0` only matters if audio is decoded through torchcodec. Silero needs a **mono 16 kHz** tensor, so the VAD step resamples to 16 kHz independently of the 48 kHz kept for acoustic measurement.
 
 Additional reproducibility rules:
 
 - Persist **all parameters** used for every measurement (offsets, window length, formant ceiling, pitch floor/ceiling, frequency band, pre-emphasis flag, DCT settings) as columns/sidecar so any row can be reproduced.
 - Record the **Allosaurus model version** used.
 - Save QA plots (see §7).
+- Pin the **statistics environment** used for §6 modeling (e.g. Python `statsmodels`, or R `lme4`/`lmerTest`).
 
 ---
 
@@ -197,9 +218,43 @@ Following the EMU-SDMS recipe (Ch. 21, *Discrete Cosine Transform*):
 |---|---|
 | **Effect of interest** | Amplification (`aided` vs `unaided`) as a **fixed effect**. |
 | **Recording quality** | Quiet, positive SNR; no explicit denoising assumed. |
-| **Speaker normalization** | Apply normalization so **between-speaker comparison is meaningful** (Bark for VSA; for statistical models consider Lobanov/Bark normalization of formants). Document the chosen scheme. |
+| **Speaker normalization** | **Bark is the single normalization scheme** for all formant-based outcomes (tVSA, cVSA). The study is a **within-speaker** comparison (aided vs unaided per talker), so idiosyncratic between-speaker variation is allowed and acceptable; Bark is sufficient. **No pooled cross-speaker formant modeling / Lobanov normalization** is performed. |
 | **Hearing-aid confound** | Aided processing (compression, noise reduction, feedback cancellation) can alter the spectrum (esp. high frequencies) and thus affect sibilant moments/DCT and possibly formants. Treat as an interpretive caveat, not just signal. |
 | **Sampling rate caveat** | Allosaurus resamples internally to 16 kHz for *recognition*; all **acoustic measurements** are taken from the **original 48 kHz** audio, preserving the 500 Hz–15 kHz band for fricatives. |
+
+### 6.1 Time / fatigue effect across recordings
+
+**Question:** do the acoustic features drift over the course of a session (e.g. due to fatigue), and does any such drift interact with amplification?
+
+Because measurements are repeated within speakers, the recommended approach is a **linear mixed-effects model** per feature, separating the time effect from the amplification effect.
+
+**Model (per feature, e.g. cVSA per recording; or token-level F1/F2, F0, spectral centroid, DCT k1/k2):**
+
+- **Fixed effects:**
+  - `Condition` (aided/unaided) — primary effect of interest;
+  - a **time term** (see encodings below);
+  - **`Condition × time` interaction** — tests whether fatigue modulates the amplification effect (often the most informative term);
+  - `Sound` (speech material) as a covariate/stratifier (vowel space and fricative spectra differ systematically by material; otherwise material differences masquerade as time effects).
+- **Random effects:** **random intercept per `VP_ID`** at minimum; add a **random slope for the time term per speaker** if data allow (fatigue may affect talkers differently). For token-level models, nest tokens within recording.
+
+**Encoding "time" — choose based on available metadata (§1.3):**
+
+| Option | Encode as | Pros | Cons / needs |
+|---|---|---|---|
+| **A. Recording order (preferred)** | integer `RecordingOrder` within the session, or continuous `RecordedAt` | Directly tests session-level fatigue; supports a trend/curve | **Requires `RecordingOrder` / `RecordedAt`** (not in filenames) |
+| **B. Sequence M1 vs M2 (fallback)** | 2-level factor (M1=0, M2=1) | Already in filenames; no extra metadata | Only 2 points → coarse drift, not a curve; confounded if M1/M2 isn't purely temporal |
+| **C. Within-file elapsed time (exploratory)** | phoneme timestamp (s) or normalized 0–1 position within the file, as a token-level predictor | Uses existing data; good for long files | Noisy; meaningful only for connected speech (Nordwind/Diapix/Routine); within-file drift ≠ session fatigue |
+
+**Plan:** use **Option A** as the primary fatigue predictor if order/timestamps can be recovered; otherwise fall back to **Option B**. Run **Option C** as an exploratory within-file analysis on the connected-speech sounds only.
+
+**Confounds to check and report:**
+
+- **Condition ↔ order collinearity:** if `aided` was always recorded before `unaided` (or always in M1), amplification and fatigue are partially confounded and cannot be cleanly separated. Cross-tabulate `Condition × order`; note whether the protocol counterbalanced them.
+- **Material ↔ position:** if a given `Sound` always occupies the same session position, `Sound` and time are confounded — keep `Sound` in the model.
+- **Multiple outcomes:** several features are tested → apply multiple-comparison control (e.g. FDR) or pre-specify the primary outcome (cVSA).
+- **Token attrition:** fatigue may reduce speech late in a session → fewer vowels → noisier VSA; weight by or report token counts.
+
+**Stack:** fit mixed models in Python (`statsmodels` `MixedLM`) or R (`lme4` / `lmerTest`); pin the chosen environment (§2).
 
 ---
 
@@ -210,6 +265,7 @@ Generate and save check plots:
 - **Vowels:** F1–F2 scatter (Bark) per recording with the **tVSA triangle** and **cVSA convex hull** overlaid; mark rejected outliers.
 - **Fricatives:** spectrum per token with the **centroid** marked; optionally the first DCT coefficients.
 - **Segmentation:** spectrogram with Allosaurus phone boundaries and VAD speech regions overlaid for spot-checking.
+- **Time/fatigue:** feature vs recording order (or `M1`/`M2`) per speaker, with aided/unaided distinguished, to visually inspect drift and any `Condition × time` interaction.
 
 ---
 
@@ -239,6 +295,7 @@ WebMAUS is a **forced aligner**: it needs **audio + transcript** and places know
 
 - `config/ipa_phoneme_map.csv` — the IPA→phoneme mapping (§3.2).
 - Speaker metadata CSV (`VP_ID`, `Gender`).
+- (Optional) recording-order metadata (`RecordingOrder` / `RecordedAt`) for the time/fatigue analysis (§1.3, §6.1).
 - Parameter defaults file (offsets, window, bands, DCT settings, pitch/formant settings).
 - All outputs carry full parameter provenance and package versions (§2).
 
@@ -248,6 +305,8 @@ WebMAUS is a **forced aligner**: it needs **audio + transcript** and places know
 
 - Hillenbrand, J., Getty, L. A., Clark, M. J., & Wheeler, K. (1995). Acoustic characteristics of American English vowels. *JASA*, 97(5), 3099–3111. *(vowel sampling, F1/F2 ranges)*
 - Chung et al. (2017). Vowel space area measures. PMC5724721. *(tVSA / cVSA)*
+- Lobanov, B. M. (1971). Classification of Russian vowels spoken by different speakers. *JASA*, 49(2B), 606–608. *(speaker normalization — noted as not used; Bark only)*
+- Adank, P., Smits, R., & van Hout, R. (2004). A comparison of vowel normalization procedures. *JASA*, 116(5), 3099–3107. *(normalization rationale)*
 - Forrest, K., Weismer, G., Milenkovic, P., & Dougall, R. N. (1988). Statistical analysis of word-initial voiceless obstruents. *JASA*. *(spectral moments)*
 - Jongman, A., Wayland, R., & Wong, S. (2000). Acoustic characteristics of English fricatives. *JASA*. *(spectral moments)*
 - EMU-SDMS Manual, Ch. 21 — Discrete Cosine Transform. *(fricative DCT)*
