@@ -1,7 +1,8 @@
 # EVASPEEP — IPA (Allosaurus, deu) -> analysis phoneme map
 # See docs/acoustic-analysis-design.md sec. 3.2.
 #
-# DRAFT scaffold, refined against real Allosaurus output (VP01 Nordwind dump, 2026-06-30).
+# Refined against real Allosaurus output (two VP01 Nordwind dumps, 2026-06-30/07-01).
+# All 35 distinct phones observed so far are covered (coverage checker: 0 missing).
 # Columns:
 #   ipa       : EXACT symbol Allosaurus emits. This is the literal match key —
 #               never substitute an ASCII lookalike here (e.g. do NOT put 'S' for 'ʃ').
@@ -22,9 +23,9 @@
 #     and intent is documented.
 #   - kept fricatives: f v s z ʃ ʒ
 #
-# NOTE: ʃ and ʒ were NOT observed in the VP01 Nordwind dump (Allosaurus rendered
-# 'sch' as plain 's' there). They are retained as valid targets; confirm with a
-# sch-heavy recording before trusting fricative /ʃ ʒ/ counts.
+# Observation notes:
+#   - ʃ CONFIRMED present (Allosaurus emits the true IPA 'ʃ', not 'S'); match on ʃ.
+#   - ʒ (voiced postalveolar) not yet observed; retained as a valid target.
 ipa,phoneme,xsampa,category,is_corner,note
 # --- Vowels: corners (long folded to short) ---
 i,i,i,vowel,i,close front (corner)
@@ -40,25 +41,25 @@ e,e,e,vowel,NA,close-mid front
 ɔ,O,O,vowel,NA,open-mid back
 o,o,o,vowel,NA,close-mid back
 y,y,y,vowel,NA,close front rounded
+œ,oe,9,vowel,NA,open-mid front rounded
+ʏ,Y,Y,vowel,NA,near-close near-front rounded
 # --- Vowels dropped (schwa / reduced) ---
 ə,NA,@,NA,NA,schwa dropped (§3.2)
 ɐ,NA,6,NA,NA,reduced dropped (§3.2)
-œ,oe,9,vowel,NA,open-mid front rounded
-ʏ,Y,Y,vowel,NA,near-close near-front rounded
 # --- Kept fricatives ---
 f,f,f,fricative,NA,voiceless labiodental
 v,v,v,fricative,NA,voiced labiodental
 s,s,s,fricative,NA,voiceless alveolar
 z,z,z,fricative,NA,voiced alveolar
-ʃ,sh,S,fricative,NA,voiceless postalveolar (unobserved in VP01 dump; confirm)
-ʒ,zh,Z,fricative,NA,voiced postalveolar (unobserved in VP01 dump; confirm)
+ʃ,sh,S,fricative,NA,voiceless postalveolar (CONFIRMED in VP01 dump)
+ʒ,zh,Z,fricative,NA,voiced postalveolar (not yet observed; confirm)
 # --- Fricatives / r-sounds mapped to NA (§3.2) ---
 ç,NA,C,NA,NA,ich-Laut -> NA
 x,NA,x,NA,NA,ach-Laut -> NA
 h,NA,h,NA,NA,glottal -> NA
 ʁ,NA,R\,NA,NA,uvular fricative r -> NA
 ʀ,NA,R,NA,NA,uvular trill r -> NA (observed alongside ʁ)
-# --- Stops / nasals / liquids / glides / aspirated stops -> NA (observed in dump) ---
+# --- Stops / nasals / liquids / glides / aspirated stops -> NA (observed in dumps) ---
 p,NA,p,NA,NA,voiceless bilabial stop
 b,NA,b,NA,NA,voiced bilabial stop
 t,NA,t,NA,NA,voiceless alveolar stop
