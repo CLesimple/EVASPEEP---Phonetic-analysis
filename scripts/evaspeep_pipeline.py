@@ -277,20 +277,39 @@ def recognize_phones(
 def vad_speech_regions(wav_path: str | Path) -> list[tuple[float, float]]:
     """Return [(start_s, end_s), ...] speech regions via Silero VAD (§3.3).
 
-    Resamples to mono 16 kHz for VAD only; the 48 kHz audio is used elsewhere
-    for acoustic measurement.
+    Audio is loaded with ``soundfile`` (not torchaudio) to avoid the
+    TorchCodec/FFmpeg backend requirement on Windows. The signal is downmixed to
+    mono and resampled to 16 kHz (Silero's required rate) for VAD only; the
+    original 48 kHz 32-bit float audio is used elsewhere for measurement.
     """
+    import numpy as np  # lazy import
     import torch  # lazy import
-    import torchaudio  # lazy import
+    import soundfile as sf  # lazy import (no FFmpeg needed)
 
+    # Load with soundfile (handles 32-bit float natively), downmix to mono.
+    data, sr = sf.read(str(wav_path), always_2d=True, dtype="float32")
+    mono = data.mean(axis=1)
+
+    # Resample to 16 kHz if needed (linear interp keeps deps minimal).
+    target_sr = VAD_SAMPLE_RATE
+    if sr != target_sr:
+        n_out = int(round(len(mono) * target_sr / sr))
+        if n_out <= 1:
+            return []
+        x_old = np.linspace(0.0, 1.0, num=len(mono), endpoint=False)
+        x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
+        mono = np.interp(x_new, x_old, mono).astype(np.float32)
+
+    wav_tensor = torch.from_numpy(mono)
+
+    # Load Silero and get timestamps directly from the tensor (no read_audio).
     model, utils = torch.hub.load(
         repo_or_dir="snakers4/silero-vad", model="silero_vad", trust_repo=True
     )
-    (get_speech_timestamps, _, read_audio, _, _) = utils
+    get_speech_timestamps = utils[0]  # index 0 is stable across versions
 
-    wav = read_audio(str(wav_path), sampling_rate=VAD_SAMPLE_RATE)
     ts = get_speech_timestamps(
-        wav, model, sampling_rate=VAD_SAMPLE_RATE, return_seconds=True
+        wav_tensor, model, sampling_rate=target_sr, return_seconds=True
     )
     return [(float(seg["start"]), float(seg["end"])) for seg in ts]
 
