@@ -208,17 +208,41 @@ def recognize_phones(
 ) -> list[Phone]:
     """Run Allosaurus with timestamps and parse **all** lines (§3.1).
 
-    IMPORTANT: the timestamped output has NO header row — the first line is a
-    real phone, so we parse ``rows`` (not ``rows[1:]``) and cast time/duration to
-    float immediately. Top-k candidates are captured for QA logging.
+    Allosaurus uses Python's stdlib ``wave``, which only reads PCM-integer WAVs
+    (format 1). EVASPEEP masters are 48 kHz 32-bit float (WAV format 3), which
+    ``wave`` rejects ('unknown format: 3'). We therefore transcode to a temporary
+    16-bit PCM copy **for recognition only**; timestamps are in seconds and map
+    back onto the original untouched audio. The 32-bit float master is still used
+    for all acoustic measurement (parselmouth/soundfile handle it natively).
+
+    The timestamped output has NO header row — the first line is a real phone —
+    so we parse every line and cast time/duration to float. Top-k candidates are
+    captured for QA logging.
     """
+    import tempfile
+    import os
+    import soundfile as sf  # reads float WAV; writes PCM_16
     from allosaurus.app import read_recognizer  # lazy import
 
-    recognizer = read_recognizer()
-    # topk>1 yields candidate probabilities for QA; the exact return formatting
-    # depends on the installed allosaurus version, so we parse defensively.
-    raw = recognizer.recognize(str(wav_path), lang_id=lang, timestamp=True, topk=topk)
+    # --- Transcode to temp 16-bit PCM only if needed -----------------------
+    data, sr = sf.read(str(wav_path), always_2d=True)  # float array, any subtype
+    if data.shape[1] > 1:                               # downmix to mono if stereo
+        data = data.mean(axis=1, keepdims=True)
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        sf.write(tmp_path, data[:, 0], sr, subtype="PCM_16")
 
+        recognizer = read_recognizer()
+        raw = recognizer.recognize(tmp_path, lang_id=lang, timestamp=True, topk=topk)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    # --- Parse every emitted line -----------------------------------------
     phones: list[Phone] = []
     for line in str(raw).splitlines():
         line = line.strip()
@@ -231,10 +255,8 @@ def recognize_phones(
             t = float(parts[0])
             dur = float(parts[1])
         except ValueError:
-            # Not a timing line; skip defensively.
             continue
         top1 = parts[2]
-        # Remaining tokens (if any) are alternating candidate/prob pairs.
         cands, probs = [top1], []
         rest = parts[3:]
         for i in range(0, len(rest) - 1, 2):
