@@ -662,20 +662,23 @@ def spectral_moments(
     """Four spectral moments via parselmouth (§5.2).
 
     Centroid (centre of gravity), SD, skewness, kurtosis — computed WITHOUT
-    additional pre-emphasis, over a Hamming-windowed spectrum, band-limited to
+    additional pre-emphasis, over a windowed spectrum, band-limited to
     ``band_hz``. ``pre_emphasis=False`` is recorded for provenance.
     """
     import parselmouth  # lazy import
+    from parselmouth import WindowShape  # enum for extract_part
     from parselmouth.praat import call  # lazy import
 
     snd = parselmouth.Sound(str(wav_path)).extract_part(
-        from_time=start_s, to_time=end_s, window="Hamming", preserve_times=True
+        from_time=start_s, to_time=end_s,
+        window_shape=WindowShape.HAMMING, preserve_times=True,
     )
     if pre_emphasis:
         snd = call(snd, "Filter (pre-emphasis)...", 50.0)
 
     spectrum = snd.to_spectrum()
-    # Band-limit by zeroing bins outside [lo, hi].
+    # Band-limit by zeroing bins outside [lo, hi]; ignore if the command name
+    # differs in this Praat build (moments are still dominated by the fricative).
     try:
         call(spectrum, "Filter (pass Hann band)...", band_hz[0], band_hz[1], 100.0)
     except Exception:
@@ -708,12 +711,14 @@ def dct_coeffs(
     """
     import numpy as np  # lazy import
     import parselmouth  # lazy import
+    from parselmouth import WindowShape  # enum for extract_part
     from scipy.fft import dct  # lazy import
 
     mid = 0.5 * (start_s + end_s)
     half = 0.5 * (end_s - start_s)
     snd = parselmouth.Sound(str(wav_path)).extract_part(
-        from_time=mid - half, to_time=mid + half, window="Hamming", preserve_times=True
+        from_time=mid - half, to_time=mid + half,
+        window_shape=WindowShape.HAMMING, preserve_times=True,
     )
     spectrum = snd.to_spectrum()
     freqs = np.array([spectrum.get_frequency_from_bin_number(i + 1)
@@ -731,10 +736,18 @@ def extract_fricatives(
     phones: list[Phone],
     meta: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Per-fricative-token features (§5): moments + DCT, cognates kept separate."""
+    """Per-fricative-token features (§5): moments + DCT, cognates kept separate.
+
+    Fricatives are selected by MAP CATEGORY ('fricative') so the phoneme map is
+    the single source of truth. This avoids label drift between the map's
+    analysis labels (e.g. ʃ->'sh', ʒ->'zh') and any hard-coded set — the bug that
+    previously dropped all ʃ tokens because FRICATIVES held raw IPA (ʃ/ʒ) while
+    ph.phoneme holds the analysis label (sh/zh).
+    """
+    voiced_labels = {"v", "z", "zh"}  # analysis labels, not raw IPA
     rows: list[dict[str, Any]] = []
     for ph in phones:
-        if ph.phoneme not in FRICATIVES:
+        if getattr(ph, "category", None) != "fricative":
             continue
         win = select_fricative_centre(ph.eff_start, ph.eff_end)
         if win is None:
@@ -745,7 +758,7 @@ def extract_fricatives(
         rows.append({
             **meta,
             "phoneme": ph.phoneme,
-            "voiced": ph.phoneme in {"v", "z", "ʒ"},
+            "voiced": ph.phoneme in voiced_labels,
             "time": ph.time,
             "eff_start": ph.eff_start,
             "eff_end": ph.eff_end,
